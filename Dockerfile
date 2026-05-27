@@ -1,10 +1,15 @@
 # Use the official lightweight Python image
 FROM python:3.10-slim
 
-# Install system dependencies (FFmpeg is required by yt-dlp to merge formats)
+# Install system dependencies
+# - ffmpeg: Required by yt-dlp to merge video and audio streams
+# - curl & unzip: Required to install Deno (the JS runtime for yt-dlp)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    apt-get clean && \
+    apt-get install -y --no-install-recommends ffmpeg curl unzip && \
+    curl -fsSL https://deno.land/install.sh | sh && \
+    mv /root/.deno/bin/deno /usr/local/bin/deno && \
+    apt-get purge -y curl unzip && \
+    apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Set working directory inside the container
