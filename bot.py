@@ -90,25 +90,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as cookie_err:
                 print(f"Failed to load cookies: {cookie_err}")
 
-        # Set up yt-dlp options based on user selection
+        # Use a temporary directory to download the media
         with tempfile.TemporaryDirectory() as tmpdir:
             ydl_opts = {
                 'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
                 'quiet': True,
                 'no_warnings': True,
                 'impersonate': 'chrome', # Attempt Chrome TLS fingerprinting
+                
+                # Tell FFmpeg to merge the downloaded audio and video streams into a standard mp4 container
+                'merge_output_format': 'mp4',
             }
 
             if cookie_file_path:
                 ydl_opts['cookiefile'] = cookie_file_path
 
-            # Format formatting rules
+            # Format formatting rules (removes strict mp4/m4a extension filters to prevent format errors,
+            # letting yt-dlp select the absolute best codecs and merge them to mp4 via ffmpeg)
             if quality == "quality_1080":
-                ydl_opts['format'] = 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best'
+                ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best'
             elif quality == "quality_720":
-                ydl_opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best'
+                ydl_opts['format'] = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best'
             elif quality == "quality_360":
-                ydl_opts['format'] = 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]/best'
+                ydl_opts['format'] = 'bestvideo[height<=360]+bestaudio/best[height<=360]/best'
             elif quality == "quality_audio":
                 ydl_opts['format'] = 'bestaudio/best'
                 ydl_opts['postprocessors'] = [{
@@ -133,10 +137,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     raise extract_err
 
-            # Handle file extension changes (e.g. audio conversion changes ext to .mp3)
+            # Handle file extension changes (e.g. audio conversion changes ext to .mp3, merging overrides ext to .mp4)
             if quality == "quality_audio":
                 base, _ = os.path.splitext(downloaded_file)
                 downloaded_file = base + ".mp3"
+            else:
+                # After merging, the output file format is forced to .mp4
+                base, _ = os.path.splitext(downloaded_file)
+                downloaded_file = base + ".mp4"
 
             # Check file size before uploading
             file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
