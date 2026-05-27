@@ -1,0 +1,8 @@
+# nixpacks.toml
+# Tells Railway's builder (Nixpacks) to install ffmpeg and run the bot
+
+[phases.setup]
+nixPkgs = ["python310", "ffmpeg"]
+
+[start]
+cmd = "python bot.py"
