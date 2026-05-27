@@ -45,34 +45,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Use a temporary directory to download the media
         with tempfile.TemporaryDirectory() as tmpdir:
-            # yt-dlp configuration options
+            # First attempt with browser impersonation enabled
             ydl_opts = {
-                # Save file in the temp directory
                 'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
-                
-                # Best video + audio format that fits within Telegram's 50MB bot limit, preferably mp4
                 'format': 'best[filesize<50M][ext=mp4]/best[filesize<50M]/best',
-                
-                # Enforce the 50MB size limit (Telegram Bot API limit)
                 'max_filesize': 50 * 1024 * 1024, 
-                
                 'quiet': True,
                 'no_warnings': True,
-                
-                # Bypasses typical cloud IP blocks by impersonating a standard Chrome browser
-                'impersonate': 'chrome',
+                'impersonate': 'chrome', # Mimic standard Chrome client TLS fingerprint
             }
 
             # Inject the temporary cookies file if it was created successfully
             if cookie_file_path:
                 ydl_opts['cookiefile'] = cookie_file_path
             
-            # Download using the yt-dlp Python API
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info and download
-                info_dict = ydl.extract_info(url, download=True)
-                # Get the exact downloaded file path
-                downloaded_file = ydl.prepare_filename(info_dict)
+            try:
+                # Attempt download with browser impersonation
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=True)
+                    downloaded_file = ydl.prepare_filename(info_dict)
+            except Exception as extract_err:
+                err_str = str(extract_err).lower()
+                # If curl-cffi dependencies or the 'chrome' target is missing on the platform
+                if 'impersonate' in err_str or 'dependency' in err_str or 'target' in err_str:
+                    print("⚠️ Impersonate target not supported on this platform. Retrying without browser impersonation...")
+                    # Remove the impersonate option and try again
+                    del ydl_opts['impersonate']
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info_dict = ydl.extract_info(url, download=True)
+                        downloaded_file = ydl.prepare_filename(info_dict)
+                else:
+                    raise extract_err
                 
             # Update status
             await context.bot.edit_message_text(
