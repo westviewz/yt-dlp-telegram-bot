@@ -213,8 +213,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
-            }
+            },
+            # Force YouTube to use proper player clients instead of the
+            # degraded "tv" client that returns only storyboard thumbnails
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web", "android", "ios"],
+                }
+            },
         }
+        # Optional: YouTube Proof-of-Origin token (bypasses bot checks on some IPs)
+        po_token = os.getenv("YT_PO_TOKEN")
+        if po_token:
+            base_opts["extractor_args"]["youtube"]["po_token"] = [po_token]
+
         if cookie_path:
             base_opts["cookiefile"] = cookie_path
 
@@ -353,8 +365,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(f"✅ *Done!* Sent {label} — {file_size_mb:.1f} MB", parse_mode="Markdown")
 
     except yt_dlp.utils.DownloadError as e:
-        print(f"[yt-dlp] DownloadError: {e}")
-        await status_msg.edit_text("❌ Download failed. Try another link.")
+        err_str = str(e)
+        print(f"[yt-dlp] DownloadError: {err_str}")
+        if "not available" in err_str or "Sign in" in err_str or "bot" in err_str:
+            await status_msg.edit_text(
+                "❌ *YouTube blocked this request.*\n\n"
+                "Your cookies are expired or invalid. YouTube is only returning thumbnail data.\n\n"
+                "*To fix:*\n"
+                "1. Open your browser and log into YouTube\n"
+                "2. Re-export cookies with the extension\n"
+                "3. Update `YT_COOKIES` in Railway Variables\n"
+                "4. Railway will auto-redeploy",
+                parse_mode="Markdown",
+            )
+        else:
+            await status_msg.edit_text("❌ Download failed. Try another link.")
     except Exception as e:
         print(f"[bot] Exception: {e}")
         await status_msg.edit_text("❌ Download failed. Try another link.")
