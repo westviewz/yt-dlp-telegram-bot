@@ -1,5 +1,0 @@
-# nixpacks.toml
-# Tells Railway to install FFmpeg in the system environment
-
-[phases.setup]
-nixPkgs = ["ffmpeg"]
