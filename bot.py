@@ -2,8 +2,15 @@ import os
 import tempfile
 import base64
 import yt_dlp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes
+)
 
 # Replace with your actual Telegram Bot Token from @BotFather
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN')
@@ -11,102 +18,169 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_TELEGRAM_BOT_TOKEN')
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends a greeting message when the /start command is issued."""
     await update.message.reply_text(
-        "👋 Hello! Send me a video link (YouTube, Twitter, TikTok, etc.), "
-        "and I'll download it for you!"
+        "👋 **Hello!** I am a premium Video Downloader Bot.\n\n"
+        "Send me any video link (YouTube, TikTok, Twitter, etc.), and I'll let you choose the quality!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles incoming text messages (URLs)."""
-    url = update.message.text
-    chat_id = update.message.chat_id
-
-    # Simple validation
+    """Handles incoming text messages (URLs) and shows quality selection buttons."""
+    url = update.message.text.strip()
+    
     if not url.startswith('http'):
         await update.message.reply_text("❌ Please send a valid URL starting with http/https.")
         return
 
-    # Inform the user that processing has started
-    status_msg = await update.message.reply_text("⏳ Downloading video... Please wait.")
-    
+    # Store the URL in user_data so we can retrieve it during the callback query
+    context.user_data['current_url'] = url
+
+    # Create the quality selection inline keyboard
+    keyboard = [
+        [
+            InlineKeyboardButton("🎥 1080p (Full HD)", callback_data="quality_1080"),
+            InlineKeyboardButton("🎬 720p (HD)", callback_data="quality_720")
+        ],
+        [
+            InlineKeyboardButton("📱 360p (Data Saver)", callback_data="quality_360"),
+            InlineKeyboardButton("🎵 Audio Only (MP3)", callback_data="quality_audio")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "✨ **Select your desired download quality:**",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles button clicks for quality selection."""
+    query = update.callback_query
+    await query.answer()
+
+    url = context.user_data.get('current_url')
+    if not url:
+        await query.edit_message_text("❌ Session expired. Please send the link again.")
+        return
+
+    quality = query.data
+    chat_id = query.message.chat_id
+
+    # Translate selection into formatting rules
+    quality_names = {
+        "quality_1080": "1080p Full HD",
+        "quality_720": "720p HD",
+        "quality_360": "360p Data Saver",
+        "quality_audio": "MP3 Audio"
+    }
+
+    selected_name = quality_names.get(quality, "Unknown")
+    await query.edit_message_text(f"⏳ **Processing your request for {selected_name}...**\nDownloading from source...")
+
     cookie_file_path = None
     try:
-        # Check if Netscape cookies are supplied via base64 environment variable
+        # Check if cookies are supplied via environment variable
         cookies_b64 = os.getenv('YT_COOKIES')
         if cookies_b64:
             try:
-                # Decode and write to a temporary file
                 temp_cookies = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt')
                 decoded_cookies = base64.b64decode(cookies_b64.strip()).decode('utf-8')
                 temp_cookies.write(decoded_cookies)
                 temp_cookies.close()
                 cookie_file_path = temp_cookies.name
             except Exception as cookie_err:
-                print(f"Failed to load cookies from environment variable: {cookie_err}")
+                print(f"Failed to load cookies: {cookie_err}")
 
-        # Use a temporary directory to download the media
+        # Set up yt-dlp options based on user selection
         with tempfile.TemporaryDirectory() as tmpdir:
-            # First attempt with browser impersonation enabled
             ydl_opts = {
                 'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
-                'format': 'best[filesize<50M][ext=mp4]/best[filesize<50M]/best',
-                'max_filesize': 50 * 1024 * 1024, 
                 'quiet': True,
                 'no_warnings': True,
-                'impersonate': 'chrome', # Mimic standard Chrome client TLS fingerprint
+                'impersonate': 'chrome', # Attempt Chrome TLS fingerprinting
             }
 
-            # Inject the temporary cookies file if it was created successfully
             if cookie_file_path:
                 ydl_opts['cookiefile'] = cookie_file_path
-            
+
+            # Format formatting rules
+            if quality == "quality_1080":
+                ydl_opts['format'] = 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best'
+            elif quality == "quality_720":
+                ydl_opts['format'] = 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best'
+            elif quality == "quality_360":
+                ydl_opts['format'] = 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]/best'
+            elif quality == "quality_audio":
+                ydl_opts['format'] = 'bestaudio/best'
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
+
+            # Download task with fallback for missing impersonation support
             try:
-                # Attempt download with browser impersonation
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info_dict = ydl.extract_info(url, download=True)
                     downloaded_file = ydl.prepare_filename(info_dict)
             except Exception as extract_err:
                 err_str = str(extract_err).lower()
-                # If curl-cffi dependencies or the 'chrome' target is missing on the platform
                 if 'impersonate' in err_str or 'dependency' in err_str or 'target' in err_str:
-                    print("⚠️ Impersonate target not supported on this platform. Retrying without browser impersonation...")
-                    # Remove the impersonate option and try again
+                    print("⚠️ Impersonate target failed, retrying without browser impersonation...")
                     del ydl_opts['impersonate']
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info_dict = ydl.extract_info(url, download=True)
                         downloaded_file = ydl.prepare_filename(info_dict)
                 else:
                     raise extract_err
-                
-            # Update status
-            await context.bot.edit_message_text(
-                chat_id=chat_id, 
-                message_id=status_msg.message_id, 
-                text="📤 Uploading video to Telegram..."
-            )
-            
-            # Send the video back to the user
-            with open(downloaded_file, 'rb') as video:
-                await context.bot.send_video(
-                    chat_id=chat_id, 
-                    video=video, 
-                    supports_streaming=True,
-                    caption=info_dict.get('title', 'Downloaded via yt-dlp')
+
+            # Handle file extension changes (e.g. audio conversion changes ext to .mp3)
+            if quality == "quality_audio":
+                base, _ = os.path.splitext(downloaded_file)
+                downloaded_file = base + ".mp3"
+
+            # Check file size before uploading
+            file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+            if file_size_mb > 50.0 and quality != "quality_audio":
+                await query.edit_message_text(
+                    f"⚠️ **File size exceeds limit!**\n\n"
+                    f"The video is **{file_size_mb:.2f} MB**, which exceeds Telegram's **50 MB** upload limit for bots.\n\n"
+                    f"👉 Please send the link again and choose a lower resolution (e.g., **720p** or **360p**)."
                 )
-                
-            # Clean up the status message
-            await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+                return
+
+            await query.edit_message_text("📤 **Uploading file to Telegram...**")
+
+            # Send the file to Telegram
+            with open(downloaded_file, 'rb') as f:
+                if quality == "quality_audio":
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=f,
+                        caption=info_dict.get('title', 'Audio'),
+                        title=info_dict.get('title', 'Audio'),
+                        performer=info_dict.get('uploader', 'yt-dlp')
+                    )
+                else:
+                    await context.bot.send_video(
+                        chat_id=chat_id,
+                        video=f,
+                        supports_streaming=True,
+                        caption=info_dict.get('title', 'Video')
+                    )
+            
+            await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
 
     except yt_dlp.utils.DownloadError as e:
-        await context.bot.edit_message_text(
-            chat_id=chat_id, 
-            message_id=status_msg.message_id, 
-            text=f"❌ Download failed (File might be larger than 50MB or URL is unsupported).\n\nDetails: {str(e)}"
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ **Download failed.**\nThis video might not have your selected resolution, or anti-bot checks blocked the connection.\n\n*Details:*\n`{str(e)}`",
+            parse_mode="Markdown"
         )
     except Exception as e:
-         await context.bot.edit_message_text(
-             chat_id=chat_id, 
-             message_id=status_msg.message_id, 
-             text=f"⚠️ An error occurred: {str(e)}"
+         await context.bot.send_message(
+             chat_id=chat_id,
+             text=f"⚠️ **An error occurred during processing:**\n`{str(e)}`",
+             parse_mode="Markdown"
          )
     finally:
         # Clean up temporary cookies file if we created one
@@ -126,6 +200,7 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
     # Start polling for updates
     print("Bot is polling... Press Ctrl+C to stop.")
