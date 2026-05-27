@@ -1,4 +1,6 @@
 import os
+import sys
+import shutil
 import tempfile
 import base64
 import yt_dlp
@@ -76,26 +78,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected_name = quality_names.get(quality, "Unknown")
     await query.edit_message_text(f"⏳ **Processing your request for {selected_name}...**\nDownloading from source...")
 
+    # Log diagnostic information to the console
+    print(f"\n--- Diagnostic Log for Video Download ---")
+    print(f"URL: {url}")
+    print(f"Target Quality: {selected_name}")
+
+    # Check if FFmpeg is available on the system path
+    ffmpeg_path = shutil.which('ffmpeg')
+    print(f"FFmpeg detected: {ffmpeg_path is not None} (Path: {ffmpeg_path})")
+
     cookie_file_path = None
     try:
         # Check if cookies are supplied via environment variable
         cookies_b64 = os.getenv('YT_COOKIES')
         if cookies_b64:
+            print(f"YT_COOKIES environment variable found (Length: {len(cookies_b64)} chars)")
             try:
                 temp_cookies = tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt')
                 decoded_cookies = base64.b64decode(cookies_b64.strip()).decode('utf-8')
                 temp_cookies.write(decoded_cookies)
                 temp_cookies.close()
                 cookie_file_path = temp_cookies.name
+                print(f"Successfully wrote decoded cookies to temporary file: {cookie_file_path}")
             except Exception as cookie_err:
-                print(f"Failed to load cookies: {cookie_err}")
+                print(f"ERROR decoding/writing cookies: {cookie_err}")
+        else:
+            print("WARNING: No YT_COOKIES environment variable found. YouTube will likely trigger bot verification.")
 
         # Use a temporary directory to download the media
         with tempfile.TemporaryDirectory() as tmpdir:
             ydl_opts = {
                 'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False, # Set to False for richer console diagnostics in Railway logs
+                'no_warnings': False,
                 'impersonate': 'chrome', # Attempt Chrome TLS fingerprinting
                 
                 # Tell FFmpeg to merge the downloaded audio and video streams into a standard mp4 container
@@ -105,8 +120,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if cookie_file_path:
                 ydl_opts['cookiefile'] = cookie_file_path
 
-            # Format formatting rules (removes strict mp4/m4a extension filters to prevent format errors,
-            # letting yt-dlp select the absolute best codecs and merge them to mp4 via ffmpeg)
+            # Format formatting rules
             if quality == "quality_1080":
                 ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best'
             elif quality == "quality_720":
@@ -120,6 +134,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }]
+
+            print(f"Final yt-dlp format option set to: {ydl_opts['format']}")
 
             # Download task with fallback for missing impersonation support
             try:
@@ -148,6 +164,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             # Check file size before uploading
             file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+            print(f"Download complete. File size: {file_size_mb:.2f} MB. Path: {downloaded_file}")
+            
             if file_size_mb > 50.0 and quality != "quality_audio":
                 await query.edit_message_text(
                     f"⚠️ **File size exceeds limit!**\n\n"
@@ -179,12 +197,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
 
     except yt_dlp.utils.DownloadError as e:
+        print(f"DownloadError caught: {e}")
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❌ **Download failed.**\nThis video might not have your selected resolution, or anti-bot checks blocked the connection.\n\n*Details:*\n`{str(e)}`",
             parse_mode="Markdown"
         )
     except Exception as e:
+         print(f"Generic Exception caught: {e}")
          await context.bot.send_message(
              chat_id=chat_id,
              text=f"⚠️ **An error occurred during processing:**\n`{str(e)}`",
@@ -197,6 +217,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.unlink(cookie_file_path)
             except Exception:
                 pass
+        print(f"--- End of Diagnostic Log ---\n")
 
 def main():
     """Starts the Telegram bot."""
