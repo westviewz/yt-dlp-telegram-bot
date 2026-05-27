@@ -37,19 +37,27 @@ def is_owner(user_id: int) -> bool:
     return user_id == OWNER_ID
 
 
-def get_cookie_file() -> str | None:
-    """Decode base64 YT_COOKIES env var into a temporary Netscape cookie file."""
-    cookies_b64 = os.getenv("YT_COOKIES")
-    if not cookies_b64:
-        return None
+def get_cookie_file() -> tuple[str | None, str | None]:
+    """Decode base64 YT_COOKIES env var or load raw Netscape cookies into a temporary file.
+    Returns (temp_file_path, error_message)."""
+    cookies_raw = os.getenv("YT_COOKIES")
+    if not cookies_raw:
+        return None, "YT_COOKIES environment variable is missing"
+    
+    raw_content = cookies_raw.strip()
     try:
-        tmp = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt")
-        tmp.write(base64.b64decode(cookies_b64.strip()).decode("utf-8"))
+        # Check if the user pasted raw Netscape text directly or base64-encoded it
+        if raw_content.startswith("# Netscape") or "youtube.com" in raw_content:
+            decoded_bytes = raw_content.encode("utf-8")
+        else:
+            decoded_bytes = base64.b64decode(raw_content)
+            
+        tmp = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".txt", encoding="utf-8")
+        tmp.write(decoded_bytes.decode("utf-8"))
         tmp.close()
-        return tmp.name
+        return tmp.name, None
     except Exception as e:
-        print(f"[cookie-loader] Failed to decode YT_COOKIES: {e}")
-        return None
+        return None, f"Failed to decode cookies: {str(e)}"
 
 
 def compress_video(input_path: str, output_path: str, profile: dict, extra_crf: int = 0) -> bool:
@@ -186,9 +194,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = label_map.get(target_res, target_res)
 
     status_msg = query.message
-    await status_msg.edit_text(f"⏳ *Downloading source for {label}…*", parse_mode="Markdown")
+    cookie_path, cookie_err = get_cookie_file()
+    
+    status_text = f"⏳ *Downloading source for {label}…*"
+    if cookie_err:
+        status_text += f"\n⚠️ _Cookie loading warning: {cookie_err}_"
+    await status_msg.edit_text(status_text, parse_mode="Markdown")
 
-    cookie_path = get_cookie_file()
     tmpdir = tempfile.mkdtemp(prefix="ytbot_")
 
     try:
@@ -199,6 +211,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "no_warnings": True,
             "merge_output_format": "mp4",
             "format": "bestvideo+bestaudio/best" if not is_audio else "bestaudio/best",
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+            }
         }
         if cookie_path:
             ydl_opts["cookiefile"] = cookie_path
