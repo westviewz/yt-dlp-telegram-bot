@@ -205,21 +205,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # ── 1. Download raw source with yt-dlp ──────────────────────────────
+        # Do NOT specify 'format' or 'merge_output_format' — let yt-dlp use
+        # its built-in defaults to guarantee it downloads *something*.
+        # We re-encode with FFmpeg afterwards anyway.
         ydl_opts = {
             "outtmpl": os.path.join(tmpdir, "source.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
-            "merge_output_format": "mp4",
-            "format": "bv*+ba/b" if not is_audio else "ba/b",
+            "check_formats": False,  # Skip format verification
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"',
             }
         }
+        # For audio-only, request audio format specifically
+        if is_audio:
+            ydl_opts["format"] = "bestaudio/best"
+        
         if cookie_path:
             ydl_opts["cookiefile"] = cookie_path
 
