@@ -205,30 +205,63 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # ── 1. Download raw source with yt-dlp ──────────────────────────────
-        # Do NOT specify 'format' or 'merge_output_format' — let yt-dlp use
-        # its built-in defaults to guarantee it downloads *something*.
-        # We re-encode with FFmpeg afterwards anyway.
-        ydl_opts = {
+        base_opts = {
             "outtmpl": os.path.join(tmpdir, "source.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
-            "check_formats": False,  # Skip format verification
+            "check_formats": False,
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             }
         }
-        # For audio-only, request audio format specifically
-        if is_audio:
-            ydl_opts["format"] = "bestaudio/best"
-        
         if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
+            base_opts["cookiefile"] = cookie_path
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get("title", "video")
+        # ── Diagnostic: list what formats YouTube is actually offering ────
+        print(f"\n=== FORMAT DIAGNOSTIC for {url} ===")
+        try:
+            diag_opts = {**base_opts, "quiet": False, "listformats": True}
+            with yt_dlp.YoutubeDL(diag_opts) as ydl:
+                ydl.extract_info(url, download=False)
+        except SystemExit:
+            pass
+        except Exception as diag_e:
+            print(f"[diag] Format listing failed: {diag_e}")
+        print("=== END FORMAT DIAGNOSTIC ===\n")
+
+        # ── Download with escalating fallbacks ────────────────────────────
+        format_attempts = (
+            ["bestaudio/best"] if is_audio else
+            [None, "best", "worst"]  # None = yt-dlp default
+        )
+
+        info = None
+        last_err = None
+        for fmt in format_attempts:
+            try:
+                dl_opts = {**base_opts}
+                if fmt:
+                    dl_opts["format"] = fmt
+                print(f"[download] Trying format: {fmt or '(yt-dlp default)'}")
+                with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                break  # Success
+            except Exception as e:
+                last_err = e
+                print(f"[download] Format '{fmt}' failed: {e}")
+                # Clean up any partial downloads before retrying
+                for f in glob.glob(os.path.join(tmpdir, "source.*")):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
+                continue
+
+        if info is None:
+            raise last_err or Exception("All format attempts failed")
+
+        title = info.get("title", "video")
 
         # Find the downloaded source file
         source_files = glob.glob(os.path.join(tmpdir, "source.*"))
