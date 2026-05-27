@@ -31,3 +31,5 @@ config.ini
 *.token
 *.key
 credentials.json
+cookies.txt
+generate_cookies.py
