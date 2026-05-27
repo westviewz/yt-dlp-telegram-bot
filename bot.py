@@ -210,7 +210,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "quiet": True,
             "no_warnings": True,
             "merge_output_format": "mp4",
-            "format": "bestvideo+bestaudio/best" if not is_audio else "bestaudio/best",
+            "format": "bv*+ba/b" if not is_audio else "ba/b",
             "http_headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
