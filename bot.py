@@ -198,7 +198,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_text = f"⏳ *Downloading source for {label}…*"
     if cookie_err:
-        status_text += f"\n⚠️ _Cookie loading warning: {cookie_err}_"
+        safe_err = cookie_err.replace("_", "\\_")
+        status_text += f"\n⚠️ _Cookie loading warning: {safe_err}_"
     await status_msg.edit_text(status_text, parse_mode="Markdown")
 
     tmpdir = tempfile.mkdtemp(prefix="ytbot_")
